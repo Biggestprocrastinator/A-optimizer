@@ -143,6 +143,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+pro.py
 
 # Local frontend artifacts
 frontend/node_modules/
