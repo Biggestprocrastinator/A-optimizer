@@ -277,7 +277,7 @@ function App() {
                   {key}: {weights[key].toFixed(1)}
                 </label>
                 <input
-                  type="range" min="0" max="2" step="0.1"
+                  type="range" min="0" max="1" step="0.1"
                   value={weights[key]}
                   onChange={(e) => handleWeightChange(key, e.target.value)}
                   className="w-full"
