@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import L from "leaflet";
 import { MapContainer, Polyline, TileLayer, useMap } from "react-leaflet";
 
@@ -11,22 +11,22 @@ const defaultWeights = {
   facility: 1,
 };
 
+// ---------------- MAP HELPERS ---------------- //
+
 function FitRouteBounds({ routeCoords }) {
   const map = useMap();
-
   useEffect(() => {
     if (routeCoords.length > 1) {
       const bounds = L.latLngBounds(routeCoords);
       map.fitBounds(bounds, { padding: [40, 40] });
     }
   }, [map, routeCoords]);
-
   return null;
 }
 
 function NodeLayerManager({ coordinates, routePath }) {
   const map = useMap();
-  const allNodesLayerRef = useRef(null);
+  const allNodesLayerRef   = useRef(null);
   const routeNodesLayerRef = useRef(null);
 
   useEffect(() => {
@@ -36,27 +36,20 @@ function NodeLayerManager({ coordinates, routePath }) {
     if (!routeNodesLayerRef.current) {
       routeNodesLayerRef.current = L.layerGroup();
     }
-
     return () => {
-      if (allNodesLayerRef.current && map.hasLayer(allNodesLayerRef.current)) {
+      if (allNodesLayerRef.current && map.hasLayer(allNodesLayerRef.current))
         map.removeLayer(allNodesLayerRef.current);
-      }
-      if (routeNodesLayerRef.current && map.hasLayer(routeNodesLayerRef.current)) {
+      if (routeNodesLayerRef.current && map.hasLayer(routeNodesLayerRef.current))
         map.removeLayer(routeNodesLayerRef.current);
-      }
     };
   }, [map]);
 
   useEffect(() => {
     if (!allNodesLayerRef.current) return;
-
     allNodesLayerRef.current.clearLayers();
     Object.entries(coordinates).forEach(([nodeId, coords]) => {
       const marker = L.circleMarker(coords, {
-        radius: 6,
-        color: "#2563eb",
-        fillColor: "#2563eb",
-        fillOpacity: 0.9,
+        radius: 6, color: "#2563eb", fillColor: "#2563eb", fillOpacity: 0.9,
       });
       marker.nodeId = nodeId;
       marker.bindPopup(nodeId);
@@ -68,68 +61,136 @@ function NodeLayerManager({ coordinates, routePath }) {
     if (!allNodesLayerRef.current || !routeNodesLayerRef.current) return;
 
     if (routePath.length > 1) {
-      if (map.hasLayer(allNodesLayerRef.current)) {
-        map.removeLayer(allNodesLayerRef.current);
-      }
-
+      if (map.hasLayer(allNodesLayerRef.current)) map.removeLayer(allNodesLayerRef.current);
       routeNodesLayerRef.current.clearLayers();
       routePath.forEach((nodeId) => {
         const coords = coordinates[nodeId];
         if (!coords) return;
-
         const marker = L.circleMarker(coords, {
-          radius: 7,
-          color: "#22c55e",
-          fillColor: "#22c55e",
-          fillOpacity: 1,
+          radius: 7, color: "#22c55e", fillColor: "#22c55e", fillOpacity: 1,
         });
         marker.bindPopup(nodeId);
         marker.addTo(routeNodesLayerRef.current);
       });
-
-      if (!map.hasLayer(routeNodesLayerRef.current)) {
-        routeNodesLayerRef.current.addTo(map);
-      }
+      if (!map.hasLayer(routeNodesLayerRef.current)) routeNodesLayerRef.current.addTo(map);
       return;
     }
 
-    if (map.hasLayer(routeNodesLayerRef.current)) {
-      map.removeLayer(routeNodesLayerRef.current);
-    }
-    if (!map.hasLayer(allNodesLayerRef.current)) {
-      allNodesLayerRef.current.addTo(map);
-    }
+    if (map.hasLayer(routeNodesLayerRef.current)) map.removeLayer(routeNodesLayerRef.current);
+    if (!map.hasLayer(allNodesLayerRef.current)) allNodesLayerRef.current.addTo(map);
   }, [coordinates, map, routePath]);
 
   return null;
 }
 
-function App() {
-  const [nodes, setNodes] = useState([]);
-  const [coordinates, setCoordinates] = useState({});
-  const [start, setStart] = useState("Warehouse");
-  const [destination, setDestination] = useState("Destination");
-  const [weights, setWeights] = useState(defaultWeights);
-  const [routePath, setRoutePath] = useState([]);
-  const [routeCoordinates, setRouteCoordinates] = useState([]);
-  const [breakdown, setBreakdown] = useState([]);
-  const [totalCost, setTotalCost] = useState(null);
-  const [error, setError] = useState("");
+// ---------------- TIMER BAR ---------------- //
 
+function TimerBar({ trip }) {
+  const pct = trip.total_seconds > 0
+    ? Math.max(0, trip.remaining_seconds / trip.total_seconds)
+    : 0;
+
+  const mins = Math.floor(trip.remaining_seconds / 60);
+  const secs = trip.remaining_seconds % 60;
+  const timeStr = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  const isDone = trip.status === "completed";
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+      {/* Route path */}
+      <p className="mb-1 font-medium text-slate-700 truncate">
+        {trip.path.join(" → ")}
+      </p>
+
+      {/* Progress bar */}
+      <div className="mb-1 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+        <div
+          className={`h-2 rounded-full transition-all duration-1000 ${isDone ? "bg-emerald-500" : "bg-blue-500"}`}
+          style={{ width: `${(1 - pct) * 100}%` }}   // fills left-to-right as time passes
+        />
+      </div>
+
+      {/* Status */}
+      <div className="flex items-center justify-between">
+        <span className={`text-xs font-semibold ${isDone ? "text-emerald-600" : "text-blue-600"}`}>
+          {isDone ? "✓ Completed" : `${timeStr} remaining`}
+        </span>
+        <span className="text-xs text-slate-400">
+          dist: {Math.round(trip.total_seconds / 3)} units
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- RESOURCE DOTS ---------------- //
+
+function ResourceDots({ used, max, color }) {
+  return (
+    <div className="flex gap-1 flex-wrap">
+      {Array.from({ length: max }).map((_, i) => (
+        <span
+          key={i}
+          className={`inline-block h-3 w-3 rounded-full ${i < (max - used) ? color : "bg-slate-200"}`}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ---------------- MAIN APP ---------------- //
+
+function App() {
+  const [nodes, setNodes]                   = useState([]);
+  const [coordinates, setCoordinates]       = useState({});
+  const [start, setStart]                   = useState("Warehouse");
+  const [destination, setDestination]       = useState("Destination");
+  const [weights, setWeights]               = useState(defaultWeights);
+  const [routePath, setRoutePath]           = useState([]);
+  const [routeCoordinates, setRouteCoordinates] = useState([]);
+  const [breakdown, setBreakdown]           = useState([]);
+  const [totalCost, setTotalCost]           = useState(null);
+  const [error, setError]                   = useState("");
+  const [loading, setLoading]               = useState(false);
+
+  // Resource + trip state
+  const [resources, setResources]           = useState({ vehicles: 5, drivers: 5, max_vehicles: 5, max_drivers: 5 });
+  const [activeTrips, setActiveTrips]       = useState([]);
+
+  // Load nodes once
   useEffect(() => {
     const loadNodes = async () => {
       try {
-        const res = await fetch(`${API_BASE}/nodes`);
+        const res  = await fetch(`${API_BASE}/nodes`);
         const data = await res.json();
         setNodes(data.nodes);
         setCoordinates(data.coordinates);
-      } catch (err) {
+      } catch {
         setError("Could not load map nodes from backend.");
       }
     };
-
     loadNodes();
   }, []);
+
+  // Poll resources + active trips every second
+  const pollStatus = useCallback(async () => {
+    try {
+      const [rRes, tRes] = await Promise.all([
+        fetch(`${API_BASE}/resources`),
+        fetch(`${API_BASE}/trips/active`),
+      ]);
+      setResources(await rRes.json());
+      setActiveTrips(await tRes.json());
+    } catch {
+      // silently ignore polling errors
+    }
+  }, []);
+
+  useEffect(() => {
+    pollStatus();
+    const id = setInterval(pollStatus, 1000);
+    return () => clearInterval(id);
+  }, [pollStatus]);
 
   const center = useMemo(() => {
     const values = Object.values(coordinates);
@@ -145,16 +206,12 @@ function App() {
 
   const findRoute = async () => {
     setError("");
-
+    setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/route`, {
-        method: "POST",
+        method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          start,
-          destination,
-          weights,
-        }),
+        body:    JSON.stringify({ start, destination, weights }),
       });
 
       if (!res.ok) {
@@ -173,6 +230,8 @@ function App() {
       setBreakdown([]);
       setTotalCost(null);
       setError(err.message || "Unexpected error.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -181,132 +240,149 @@ function App() {
     setRouteCoordinates([]);
   };
 
+  const noResources = resources.vehicles === 0 || resources.drivers === 0;
+
   return (
     <div className="h-screen w-screen p-4">
       <div className="mx-auto flex h-full max-w-7xl flex-col gap-4 lg:flex-row">
-        <aside className="w-full rounded-2xl bg-white p-4 shadow-lg lg:w-80">
-          <h1 className="mb-4 text-xl font-bold text-slate-800">Logistics Route Optimization</h1>
 
-          <label className="mb-2 block text-sm font-semibold text-slate-700">Start</label>
-          <select
-            className="mb-3 w-full rounded-md border border-slate-300 p-2"
-            value={start}
-            onChange={(e) => setStart(e.target.value)}
-          >
-            {nodes.map((node) => (
-              <option key={node} value={node}>
-                {node}
-              </option>
+        {/* ---- SIDEBAR ---- */}
+        <aside className="flex w-full flex-col gap-4 lg:w-80">
+
+          {/* Controls card */}
+          <div className="rounded-2xl bg-white p-4 shadow-lg">
+            <h1 className="mb-4 text-xl font-bold text-slate-800">Logistics Route Optimization</h1>
+
+            <label className="mb-2 block text-sm font-semibold text-slate-700">Start</label>
+            <select
+              className="mb-3 w-full rounded-md border border-slate-300 p-2"
+              value={start}
+              onChange={(e) => setStart(e.target.value)}
+            >
+              {nodes.map((node) => <option key={node} value={node}>{node}</option>)}
+            </select>
+
+            <label className="mb-2 block text-sm font-semibold text-slate-700">Destination</label>
+            <select
+              className="mb-4 w-full rounded-md border border-slate-300 p-2"
+              value={destination}
+              onChange={(e) => setDestination(e.target.value)}
+            >
+              {nodes.map((node) => <option key={node} value={node}>{node}</option>)}
+            </select>
+
+            {["fuel", "maintenance", "driver", "facility"].map((key) => (
+              <div key={key} className="mb-3">
+                <label className="mb-1 block text-sm font-medium capitalize text-slate-700">
+                  {key}: {weights[key].toFixed(1)}
+                </label>
+                <input
+                  type="range" min="0" max="2" step="0.1"
+                  value={weights[key]}
+                  onChange={(e) => handleWeightChange(key, e.target.value)}
+                  className="w-full"
+                />
+              </div>
             ))}
-          </select>
 
-          <label className="mb-2 block text-sm font-semibold text-slate-700">Destination</label>
-          <select
-            className="mb-4 w-full rounded-md border border-slate-300 p-2"
-            value={destination}
-            onChange={(e) => setDestination(e.target.value)}
-          >
-            {nodes.map((node) => (
-              <option key={node} value={node}>
-                {node}
-              </option>
-            ))}
-          </select>
-
-          {["fuel", "maintenance", "driver", "facility"].map((key) => (
-            <div key={key} className="mb-3">
-              <label className="mb-1 block text-sm font-medium capitalize text-slate-700">
-                {key}: {weights[key].toFixed(1)}
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="2"
-                step="0.1"
-                value={weights[key]}
-                onChange={(e) => handleWeightChange(key, e.target.value)}
-                className="w-full"
-              />
+            <div className="mt-2 flex gap-2">
+              <button
+                onClick={findRoute}
+                disabled={loading || noResources}
+                className="w-full rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {loading ? "Finding…" : "Find Route"}
+              </button>
+              <button
+                onClick={resetNodes}
+                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Reset
+              </button>
             </div>
-          ))}
 
-          <div className="mt-2 flex gap-2">
-            <button
-              onClick={findRoute}
-              className="w-full rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700"
-            >
-              Find Route
-            </button>
-            <button
-              onClick={resetNodes}
-              className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              Reset
-            </button>
+            {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+
+            <div className="mt-4 rounded-lg border border-slate-200 p-3">
+              <p className="text-sm font-semibold text-slate-700">Route Path</p>
+              <p className="mt-1 text-sm text-slate-900">
+                {routePath.length ? routePath.join(" → ") : "No route yet"}
+              </p>
+            </div>
           </div>
 
-          {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+          {/* Resources card */}
+          <div className="rounded-2xl bg-white p-4 shadow-lg">
+            <h2 className="mb-3 text-base font-bold text-slate-800">Resources</h2>
+            <div className="mb-3">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-sm font-medium text-slate-700">Vehicles</span>
+                <span className="text-sm font-semibold text-slate-900">
+                  {resources.vehicles} / {resources.max_vehicles}
+                </span>
+              </div>
+              <ResourceDots used={resources.max_vehicles - resources.vehicles} max={resources.max_vehicles} color="bg-blue-500" />
+            </div>
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-sm font-medium text-slate-700">Drivers</span>
+                <span className="text-sm font-semibold text-slate-900">
+                  {resources.drivers} / {resources.max_drivers}
+                </span>
+              </div>
+              <ResourceDots used={resources.max_drivers - resources.drivers} max={resources.max_drivers} color="bg-violet-500" />
+            </div>
+            {noResources && (
+              <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs font-semibold text-red-600">
+                All resources in use — wait for a trip to complete.
+              </p>
+            )}
+          </div>
 
-          <div className="mt-4 rounded-lg border border-slate-200 p-3">
-            <p className="text-sm font-semibold text-slate-700">Route Path</p>
-            <p className="mt-1 text-sm text-slate-900">{routePath.length ? routePath.join(" -> ") : "No route yet"}</p>
+          {/* Active trips card */}
+          <div className="rounded-2xl bg-white p-4 shadow-lg">
+            <h2 className="mb-3 text-base font-bold text-slate-800">
+              Active Trips
+              {activeTrips.length > 0 && (
+                <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">
+                  {activeTrips.length}
+                </span>
+              )}
+            </h2>
+            {activeTrips.length === 0 ? (
+              <p className="text-sm text-slate-400">No active trips.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {activeTrips.map((trip) => (
+                  <TimerBar key={trip.trip_id} trip={trip} />
+                ))}
+              </div>
+            )}
           </div>
         </aside>
 
+        {/* ---- MAIN CONTENT ---- */}
         <main className="flex min-h-0 flex-1 flex-col gap-4">
-          <div className="h-[50%] min-h-[300px] rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
-            <MapContainer center={center} zoom={11} scrollWheelZoom className="rounded-xl">
+          <div className="h-[55%] min-h-[300px] rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
+            <MapContainer center={center} zoom={11} scrollWheelZoom className="h-full w-full rounded-xl">
               <TileLayer
-                attribution="&copy; OpenStreetMap & CartoDB"
+                attribution="&copy; OpenStreetMap &amp; CartoDB"
                 subdomains="abcd"
                 maxZoom={19}
                 url="https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
               />
-              {/* Optional light labels style:
-              <TileLayer
-                attribution="&copy; OpenStreetMap & CartoDB"
-                subdomains="abcd"
-                maxZoom={19}
-                url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-              />
-              Optional dark style:
-              <TileLayer
-                attribution="&copy; OpenStreetMap & CartoDB"
-                subdomains="abcd"
-                maxZoom={19}
-                url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-              />
-              */}
-
               <NodeLayerManager coordinates={coordinates} routePath={routePath} />
-
               {routeCoordinates.length > 1 && (
                 <>
-                  <Polyline
-                    positions={routeCoordinates}
-                    pathOptions={{
-                      color: "#000",
-                      weight: 6,
-                      opacity: 0.1,
-                    }}
-                  />
-                  <Polyline
-                    positions={routeCoordinates}
-                    pathOptions={{
-                      color: "#2563eb",
-                      weight: 4,
-                      opacity: 0.95,
-                      lineJoin: "round",
-                      lineCap: "round",
-                      smoothFactor: 1.5,
-                    }}
-                  />
+                  <Polyline positions={routeCoordinates} pathOptions={{ color: "#000", weight: 6, opacity: 0.1 }} />
+                  <Polyline positions={routeCoordinates} pathOptions={{ color: "#2563eb", weight: 4, opacity: 0.95, lineJoin: "round", lineCap: "round", smoothFactor: 1.5 }} />
                   <FitRouteBounds routeCoords={routeCoordinates} />
                 </>
               )}
             </MapContainer>
           </div>
 
+          {/* Cost breakdown */}
           <div className="rounded-2xl bg-white p-4 shadow-lg">
             <h2 className="mb-3 text-lg font-bold text-slate-800">Cost Breakdown</h2>
             <div className="overflow-x-auto">
@@ -332,7 +408,7 @@ function App() {
               </table>
             </div>
             <p className="mt-3 text-base font-bold text-slate-900">
-              TOTAL COST: {totalCost === null ? "-" : `INR ${totalCost}`}
+              TOTAL COST: {totalCost === null ? "—" : `INR ${totalCost}`}
             </p>
           </div>
         </main>
