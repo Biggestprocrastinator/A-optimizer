@@ -54,6 +54,11 @@ class ResourceManager:
         with self._lock:
             return {"vehicles": self.vehicles, "drivers": self.drivers}
 
+    def reset(self):
+        with self._lock:
+            self.vehicles = MAX_VEHICLES
+            self.drivers = MAX_DRIVERS
+
 
 resources = ResourceManager()
 
@@ -110,9 +115,21 @@ class CostItem(BaseModel):
     weighted_cost: float
 
 
+class RouteSegment(BaseModel):
+    from_node: str
+    to_node: str
+    distance: int
+    fuel_cost: float
+    maintenance_cost: float
+    driver_cost: float
+    facility_cost: float
+    segment_total: float
+
+
 class RouteResponse(BaseModel):
     path:              List[str]
     breakdown:         List[CostItem]
+    segments:          List[RouteSegment]
     total_cost:        float
     route_coordinates: List[List[float]]
     trip_id:           str          # new — returned so frontend can track this trip
@@ -134,6 +151,13 @@ class ResourceStatus(BaseModel):
     max_drivers:  int
 
 
+class GraphEdge(BaseModel):
+    start: str
+    end: str
+    distance: int
+    coordinates: List[List[float]]
+
+
 # ---------------- HELPERS ---------------- #
 
 def _to_lat_lng(x: int, y: int) -> List[float]:
@@ -147,11 +171,65 @@ def _all_node_coordinates() -> Dict[str, List[float]]:
     return {node: _to_lat_lng(*xy) for node, xy in positions.items()}
 
 
+def _all_graph_edges() -> List[GraphEdge]:
+    edges: List[GraphEdge] = []
+    seen = set()
+
+    for start, neighbors in optimizer.graph.items():
+        for end, distance in neighbors.items():
+            edge_key = tuple(sorted((start, end)))
+            if edge_key in seen:
+                continue
+            seen.add(edge_key)
+            edges.append(
+                GraphEdge(
+                    start=start,
+                    end=end,
+                    distance=distance,
+                    coordinates=[
+                        _to_lat_lng(*positions[start]),
+                        _to_lat_lng(*positions[end]),
+                    ],
+                )
+            )
+
+    return edges
+
+
 def _path_distance(path: List[str]) -> int:
     return sum(
         optimizer.graph[path[i]][path[i + 1]]
         for i in range(len(path) - 1)
     )
+
+
+def _build_route_segments(path: List[str], weights: Weights) -> List[RouteSegment]:
+    segments: List[RouteSegment] = []
+
+    for i in range(len(path) - 1):
+        start = path[i]
+        end = path[i + 1]
+        distance = optimizer.graph[start][end]
+
+        fuel_cost = weights.fuel * (distance * 12)
+        maintenance_cost = weights.maintenance * (distance * 6)
+        driver_cost = weights.driver * (distance * 8)
+        facility_cost = weights.facility * 30
+
+        segments.append(
+            RouteSegment(
+                from_node=start,
+                to_node=end,
+                distance=distance,
+                fuel_cost=round(fuel_cost, 2),
+                maintenance_cost=round(maintenance_cost, 2),
+                driver_cost=round(driver_cost, 2),
+                facility_cost=round(facility_cost, 2),
+                segment_total=round(fuel_cost + maintenance_cost + driver_cost + facility_cost, 2),
+            )
+        )
+
+    return segments
 
 
 # ---------------- ROUTES ---------------- #
@@ -166,6 +244,7 @@ def get_nodes() -> Dict[str, object]:
     return {
         "nodes":       list(optimizer.graph.keys()),
         "coordinates": _all_node_coordinates(),
+        "edges":       [edge.model_dump() for edge in _all_graph_edges()],
     }
 
 
@@ -195,6 +274,21 @@ def get_active_trips() -> List[TripStatus]:
         ]
 
 
+@app.post("/reset", response_model=ResourceStatus)
+def reset_system() -> ResourceStatus:
+    with trips_lock:
+        active_trips.clear()
+
+    resources.reset()
+    s = resources.status()
+    return ResourceStatus(
+        vehicles=s["vehicles"],
+        drivers=s["drivers"],
+        max_vehicles=MAX_VEHICLES,
+        max_drivers=MAX_DRIVERS,
+    )
+
+
 @app.post("/route", response_model=RouteResponse)
 def get_route(payload: RouteRequest) -> RouteResponse:
     # Check resource availability first
@@ -213,6 +307,7 @@ def get_route(payload: RouteRequest) -> RouteResponse:
         raise HTTPException(status_code=400, detail=result["error"])
 
     path           = result["path"]
+    segments       = _build_route_segments(path, payload.weights)
     total_distance = _path_distance(path)
     total_seconds  = total_distance * SECONDS_PER_UNIT
     trip_id        = str(uuid.uuid4())
@@ -240,6 +335,7 @@ def get_route(payload: RouteRequest) -> RouteResponse:
     return RouteResponse(
         path=path,
         breakdown=result["breakdown"],
+        segments=segments,
         total_cost=result["total_cost"],
         route_coordinates=route_coordinates,
         trip_id=trip_id,

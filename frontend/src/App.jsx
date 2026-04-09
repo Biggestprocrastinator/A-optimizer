@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import L from "leaflet";
-import { MapContainer, Polyline, TileLayer, useMap } from "react-leaflet";
+import { CircleMarker, MapContainer, Polyline, Tooltip, useMap } from "react-leaflet";
 
 const API_BASE = "http://localhost:8000";
 
@@ -11,79 +11,104 @@ const defaultWeights = {
   facility: 1,
 };
 
-// ---------------- MAP HELPERS ---------------- //
+const nodeStyles = {
+  Warehouse: { fillColor: "#0f766e", color: "#0f766e", label: "Warehouse" },
+  Destination: { fillColor: "#dc2626", color: "#dc2626", label: "Destination" },
+};
 
-function FitRouteBounds({ routeCoords }) {
-  const map = useMap();
-  useEffect(() => {
-    if (routeCoords.length > 1) {
-      const bounds = L.latLngBounds(routeCoords);
-      map.fitBounds(bounds, { padding: [40, 40] });
-    }
-  }, [map, routeCoords]);
-  return null;
-}
-
-function NodeLayerManager({ coordinates, routePath }) {
-  const map = useMap();
-  const allNodesLayerRef   = useRef(null);
-  const routeNodesLayerRef = useRef(null);
-
-  useEffect(() => {
-    if (!allNodesLayerRef.current) {
-      allNodesLayerRef.current = L.layerGroup().addTo(map);
-    }
-    if (!routeNodesLayerRef.current) {
-      routeNodesLayerRef.current = L.layerGroup();
-    }
-    return () => {
-      if (allNodesLayerRef.current && map.hasLayer(allNodesLayerRef.current))
-        map.removeLayer(allNodesLayerRef.current);
-      if (routeNodesLayerRef.current && map.hasLayer(routeNodesLayerRef.current))
-        map.removeLayer(routeNodesLayerRef.current);
+function getNodeStyle(nodeId, isRouteNode) {
+  if (isRouteNode) {
+    return {
+      fillColor: "#2563eb",
+      color: "#ffffff",
+      radius: 8,
+      weight: 3,
+      fillOpacity: 1,
     };
-  }, [map]);
+  }
+
+  const variant = nodeStyles[nodeId];
+  if (variant) {
+    return {
+      ...variant,
+      radius: 8,
+      weight: 2,
+      fillOpacity: 0.95,
+    };
+  }
+
+  return {
+    fillColor: "#1d4ed8",
+    color: "#dbeafe",
+    radius: 8,
+    weight: 2,
+    fillOpacity: 0.92,
+  };
+}
+
+function FitGraphBounds({ coordinates, routeCoords }) {
+  const map = useMap();
 
   useEffect(() => {
-    if (!allNodesLayerRef.current) return;
-    allNodesLayerRef.current.clearLayers();
-    Object.entries(coordinates).forEach(([nodeId, coords]) => {
-      const marker = L.circleMarker(coords, {
-        radius: 6, color: "#2563eb", fillColor: "#2563eb", fillOpacity: 0.9,
-      });
-      marker.nodeId = nodeId;
-      marker.bindPopup(nodeId);
-      marker.addTo(allNodesLayerRef.current);
-    });
-  }, [coordinates]);
+    const activePoints = routeCoords.length > 1 ? routeCoords : Object.values(coordinates);
+    if (activePoints.length === 0) return;
 
-  useEffect(() => {
-    if (!allNodesLayerRef.current || !routeNodesLayerRef.current) return;
-
-    if (routePath.length > 1) {
-      if (map.hasLayer(allNodesLayerRef.current)) map.removeLayer(allNodesLayerRef.current);
-      routeNodesLayerRef.current.clearLayers();
-      routePath.forEach((nodeId) => {
-        const coords = coordinates[nodeId];
-        if (!coords) return;
-        const marker = L.circleMarker(coords, {
-          radius: 7, color: "#22c55e", fillColor: "#22c55e", fillOpacity: 1,
-        });
-        marker.bindPopup(nodeId);
-        marker.addTo(routeNodesLayerRef.current);
-      });
-      if (!map.hasLayer(routeNodesLayerRef.current)) routeNodesLayerRef.current.addTo(map);
-      return;
-    }
-
-    if (map.hasLayer(routeNodesLayerRef.current)) map.removeLayer(routeNodesLayerRef.current);
-    if (!map.hasLayer(allNodesLayerRef.current)) allNodesLayerRef.current.addTo(map);
-  }, [coordinates, map, routePath]);
+    const bounds = L.latLngBounds(activePoints);
+    map.fitBounds(bounds, { padding: [36, 36], maxZoom: 13 });
+  }, [coordinates, map, routeCoords]);
 
   return null;
 }
 
-// ---------------- TIMER BAR ---------------- //
+function GraphBackdrop({ edges }) {
+  return (
+    <>
+      {edges.map((edge) => (
+        <Polyline
+          key={`${edge.start}-${edge.end}-glow`}
+          positions={edge.coordinates}
+          pathOptions={{
+            color: "#cbd5e1",
+            weight: 12,
+            opacity: 0.18,
+            lineCap: "round",
+            lineJoin: "round",
+          }}
+        />
+      ))}
+      {edges.map((edge) => (
+        <Polyline
+          key={`${edge.start}-${edge.end}`}
+          positions={edge.coordinates}
+          pathOptions={{
+            color: "#64748b",
+            weight: 4,
+            opacity: 0.75,
+            lineCap: "round",
+            lineJoin: "round",
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+function NodeMarkers({ coordinates, routePath }) {
+  const routeNodeSet = useMemo(() => new Set(routePath), [routePath]);
+
+  return Object.entries(coordinates).map(([nodeId, coords]) => {
+    const isRouteNode = routeNodeSet.has(nodeId);
+    const style = getNodeStyle(nodeId, isRouteNode);
+
+    return (
+      <CircleMarker key={nodeId} center={coords} pathOptions={style} radius={style.radius}>
+        <Tooltip direction="top" offset={[0, -8]} permanent>
+          <span className="map-node-label">{style.label || nodeId}</span>
+        </Tooltip>
+      </CircleMarker>
+    );
+  });
+}
 
 function TimerBar({ trip }) {
   const pct = trip.total_seconds > 0
@@ -97,23 +122,20 @@ function TimerBar({ trip }) {
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
-      {/* Route path */}
-      <p className="mb-1 font-medium text-slate-700 truncate">
-        {trip.path.join(" → ")}
+      <p className="mb-1 truncate font-medium text-slate-700">
+        {trip.path.join(" -> ")}
       </p>
 
-      {/* Progress bar */}
       <div className="mb-1 h-2 w-full overflow-hidden rounded-full bg-slate-200">
         <div
           className={`h-2 rounded-full transition-all duration-1000 ${isDone ? "bg-emerald-500" : "bg-blue-500"}`}
-          style={{ width: `${(1 - pct) * 100}%` }}   // fills left-to-right as time passes
+          style={{ width: `${(1 - pct) * 100}%` }}
         />
       </div>
 
-      {/* Status */}
       <div className="flex items-center justify-between">
         <span className={`text-xs font-semibold ${isDone ? "text-emerald-600" : "text-blue-600"}`}>
-          {isDone ? "✓ Completed" : `${timeStr} remaining`}
+          {isDone ? "Completed" : `${timeStr} remaining`}
         </span>
         <span className="text-xs text-slate-400">
           dist: {Math.round(trip.total_seconds / 3)} units
@@ -123,11 +145,9 @@ function TimerBar({ trip }) {
   );
 }
 
-// ---------------- RESOURCE DOTS ---------------- //
-
 function ResourceDots({ used, max, color }) {
   return (
-    <div className="flex gap-1 flex-wrap">
+    <div className="flex flex-wrap gap-1">
       {Array.from({ length: max }).map((_, i) => (
         <span
           key={i}
@@ -138,33 +158,32 @@ function ResourceDots({ used, max, color }) {
   );
 }
 
-// ---------------- MAIN APP ---------------- //
-
 function App() {
-  const [nodes, setNodes]                   = useState([]);
-  const [coordinates, setCoordinates]       = useState({});
-  const [start, setStart]                   = useState("Warehouse");
-  const [destination, setDestination]       = useState("Destination");
-  const [weights, setWeights]               = useState(defaultWeights);
-  const [routePath, setRoutePath]           = useState([]);
+  const [nodes, setNodes] = useState([]);
+  const [coordinates, setCoordinates] = useState({});
+  const [edges, setEdges] = useState([]);
+  const [start, setStart] = useState("Warehouse");
+  const [destination, setDestination] = useState("Destination");
+  const [weights, setWeights] = useState(defaultWeights);
+  const [routePath, setRoutePath] = useState([]);
   const [routeCoordinates, setRouteCoordinates] = useState([]);
-  const [breakdown, setBreakdown]           = useState([]);
-  const [totalCost, setTotalCost]           = useState(null);
-  const [error, setError]                   = useState("");
-  const [loading, setLoading]               = useState(false);
+  const [breakdown, setBreakdown] = useState([]);
+  const [routeSegments, setRouteSegments] = useState([]);
+  const [totalCost, setTotalCost] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  const [resources, setResources] = useState({ vehicles: 5, drivers: 5, max_vehicles: 5, max_drivers: 5 });
+  const [activeTrips, setActiveTrips] = useState([]);
 
-  // Resource + trip state
-  const [resources, setResources]           = useState({ vehicles: 5, drivers: 5, max_vehicles: 5, max_drivers: 5 });
-  const [activeTrips, setActiveTrips]       = useState([]);
-
-  // Load nodes once
   useEffect(() => {
     const loadNodes = async () => {
       try {
-        const res  = await fetch(`${API_BASE}/nodes`);
+        const res = await fetch(`${API_BASE}/nodes`);
         const data = await res.json();
         setNodes(data.nodes);
         setCoordinates(data.coordinates);
+        setEdges(data.edges || []);
       } catch {
         setError("Could not load map nodes from backend.");
       }
@@ -172,7 +191,6 @@ function App() {
     loadNodes();
   }, []);
 
-  // Poll resources + active trips every second
   const pollStatus = useCallback(async () => {
     try {
       const [rRes, tRes] = await Promise.all([
@@ -182,7 +200,7 @@ function App() {
       setResources(await rRes.json());
       setActiveTrips(await tRes.json());
     } catch {
-      // silently ignore polling errors
+      // Ignore transient polling failures.
     }
   }, []);
 
@@ -209,9 +227,9 @@ function App() {
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/route`, {
-        method:  "POST",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ start, destination, weights }),
+        body: JSON.stringify({ start, destination, weights }),
       });
 
       if (!res.ok) {
@@ -223,21 +241,46 @@ function App() {
       setRoutePath(data.path);
       setRouteCoordinates(data.route_coordinates);
       setBreakdown(data.breakdown);
+      setRouteSegments(data.segments || []);
       setTotalCost(data.total_cost);
+      setShowDetails(false);
     } catch (err) {
       setRoutePath([]);
       setRouteCoordinates([]);
       setBreakdown([]);
+      setRouteSegments([]);
       setTotalCost(null);
+      setShowDetails(false);
       setError(err.message || "Unexpected error.");
     } finally {
       setLoading(false);
     }
   };
 
-  const resetNodes = () => {
+  const resetNodes = async () => {
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/reset`, { method: "POST" });
+      if (!res.ok) {
+        throw new Error("Reset request failed.");
+      }
+
+      const data = await res.json();
+      setResources(data);
+      setActiveTrips([]);
+    } catch (err) {
+      setError(err.message || "Could not reset the system.");
+    }
+
+    setStart("Warehouse");
+    setDestination("Destination");
+    setWeights(defaultWeights);
     setRoutePath([]);
     setRouteCoordinates([]);
+    setBreakdown([]);
+    setRouteSegments([]);
+    setTotalCost(null);
+    setShowDetails(false);
   };
 
   const noResources = resources.vehicles === 0 || resources.drivers === 0;
@@ -245,11 +288,7 @@ function App() {
   return (
     <div className="h-screen w-screen p-4">
       <div className="mx-auto flex h-full max-w-7xl flex-col gap-4 lg:flex-row">
-
-        {/* ---- SIDEBAR ---- */}
         <aside className="flex w-full flex-col gap-4 lg:w-80">
-
-          {/* Controls card */}
           <div className="rounded-2xl bg-white p-4 shadow-lg">
             <h1 className="mb-4 text-xl font-bold text-slate-800">Logistics Route Optimization</h1>
 
@@ -277,7 +316,10 @@ function App() {
                   {key}: {weights[key].toFixed(1)}
                 </label>
                 <input
-                  type="range" min="0" max="1" step="0.1"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
                   value={weights[key]}
                   onChange={(e) => handleWeightChange(key, e.target.value)}
                   className="w-full"
@@ -291,7 +333,7 @@ function App() {
                 disabled={loading || noResources}
                 className="w-full rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {loading ? "Finding…" : "Find Route"}
+                {loading ? "Finding..." : "Find Route"}
               </button>
               <button
                 onClick={resetNodes}
@@ -306,12 +348,11 @@ function App() {
             <div className="mt-4 rounded-lg border border-slate-200 p-3">
               <p className="text-sm font-semibold text-slate-700">Route Path</p>
               <p className="mt-1 text-sm text-slate-900">
-                {routePath.length ? routePath.join(" → ") : "No route yet"}
+                {routePath.length ? routePath.join(" -> ") : "No route yet"}
               </p>
             </div>
           </div>
 
-          {/* Resources card */}
           <div className="rounded-2xl bg-white p-4 shadow-lg">
             <h2 className="mb-3 text-base font-bold text-slate-800">Resources</h2>
             <div className="mb-3">
@@ -334,12 +375,11 @@ function App() {
             </div>
             {noResources && (
               <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs font-semibold text-red-600">
-                All resources in use — wait for a trip to complete.
+                All resources in use, wait for a trip to complete.
               </p>
             )}
           </div>
 
-          {/* Active trips card */}
           <div className="rounded-2xl bg-white p-4 shadow-lg">
             <h2 className="mb-3 text-base font-bold text-slate-800">
               Active Trips
@@ -361,54 +401,113 @@ function App() {
           </div>
         </aside>
 
-        {/* ---- MAIN CONTENT ---- */}
         <main className="flex min-h-0 flex-1 flex-col gap-4">
-          <div className="h-[55%] min-h-[300px] rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
-            <MapContainer center={center} zoom={11} scrollWheelZoom className="h-full w-full rounded-xl">
-              <TileLayer
-                attribution="&copy; OpenStreetMap &amp; CartoDB"
-                subdomains="abcd"
-                maxZoom={19}
-                url="https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
-              />
-              <NodeLayerManager coordinates={coordinates} routePath={routePath} />
-              {routeCoordinates.length > 1 && (
-                <>
-                  <Polyline positions={routeCoordinates} pathOptions={{ color: "#000", weight: 6, opacity: 0.1 }} />
-                  <Polyline positions={routeCoordinates} pathOptions={{ color: "#2563eb", weight: 4, opacity: 0.95, lineJoin: "round", lineCap: "round", smoothFactor: 1.5 }} />
-                  <FitRouteBounds routeCoords={routeCoordinates} />
-                </>
-              )}
-            </MapContainer>
+          <div className="network-shell h-[55%] min-h-[300px] rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
+            <div className="network-map h-full w-full overflow-hidden rounded-xl">
+              <div className="network-map__chrome">
+                <span className="network-map__badge">Custom route network</span>
+                {/* <span className="network-map__hint">Your graph nodes and connections</span> */}
+              </div>
+              <MapContainer
+                center={center}
+                zoom={11}
+                zoomControl={false}
+                attributionControl={false}
+                scrollWheelZoom
+                className="h-full w-full rounded-xl"
+              >
+                <GraphBackdrop edges={edges} />
+                <NodeMarkers coordinates={coordinates} routePath={routePath} />
+                {routeCoordinates.length > 1 && (
+                  <>
+                    <Polyline
+                      positions={routeCoordinates}
+                      pathOptions={{ color: "#0f172a", weight: 11, opacity: 0.14, lineJoin: "round", lineCap: "round" }}
+                    />
+                    <Polyline
+                      positions={routeCoordinates}
+                      pathOptions={{ color: "#22c55e", weight: 7, opacity: 0.25, lineJoin: "round", lineCap: "round" }}
+                    />
+                    <Polyline
+                      positions={routeCoordinates}
+                      pathOptions={{ color: "#2563eb", weight: 4, opacity: 0.98, lineJoin: "round", lineCap: "round" }}
+                    />
+                  </>
+                )}
+                <FitGraphBounds coordinates={coordinates} routeCoords={routeCoordinates} />
+              </MapContainer>
+            </div>
           </div>
 
-          {/* Cost breakdown */}
           <div className="rounded-2xl bg-white p-4 shadow-lg">
-            <h2 className="mb-3 text-lg font-bold text-slate-800">Cost Breakdown</h2>
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-left text-slate-600">
-                    <th className="py-2">Component</th>
-                    <th className="py-2">Base</th>
-                    <th className="py-2">Weight</th>
-                    <th className="py-2">Weighted Cost</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {breakdown.map((item) => (
-                    <tr key={item.label} className="border-b border-slate-100">
-                      <td className="py-2">{item.label}</td>
-                      <td className="py-2">{item.base}</td>
-                      <td className="py-2">{item.weight}</td>
-                      <td className="py-2">INR {item.weighted_cost}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">Chosen Route Details</h2>
+                <p className="text-sm text-slate-500">
+                  Inspect distance and per-segment cost only when needed.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowDetails((prev) => !prev)}
+                disabled={routeSegments.length === 0}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {showDetails ? "Hide Details" : "Details"}
+              </button>
             </div>
-            <p className="mt-3 text-base font-bold text-slate-900">
-              TOTAL COST: {totalCost === null ? "—" : `INR ${totalCost}`}
+
+            {routeSegments.length === 0 ? (
+              <p className="text-sm text-slate-400">Find a route to view segment-wise details.</p>
+            ) : showDetails ? (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left text-slate-600">
+                        <th className="py-2 pr-3">Segment</th>
+                        <th className="py-2 pr-3">Distance</th>
+                        <th className="py-2 pr-3">Fuel</th>
+                        <th className="py-2 pr-3">Maintenance</th>
+                        <th className="py-2 pr-3">Driver</th>
+                        <th className="py-2 pr-3">Facility</th>
+                        <th className="py-2">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {routeSegments.map((segment) => (
+                        <tr
+                          key={`${segment.from_node}-${segment.to_node}`}
+                          className="border-b border-slate-100"
+                        >
+                          <td className="py-2 pr-3 font-medium text-slate-800">
+                            {segment.from_node} -> {segment.to_node}
+                          </td>
+                          <td className="py-2 pr-3">{segment.distance}</td>
+                          <td className="py-2 pr-3">INR {segment.fuel_cost}</td>
+                          <td className="py-2 pr-3">INR {segment.maintenance_cost}</td>
+                          <td className="py-2 pr-3">INR {segment.driver_cost}</td>
+                          <td className="py-2 pr-3">INR {segment.facility_cost}</td>
+                          <td className="py-2 font-semibold text-slate-900">INR {segment.segment_total}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-4 border-t border-slate-100 pt-4 text-sm">
+                  {breakdown.map((item) => (
+                    <div key={item.label} className="rounded-lg bg-slate-50 px-3 py-2 text-slate-700">
+                      <span className="font-semibold text-slate-900">{item.label}:</span> INR {item.weighted_cost}
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-slate-500">Click the Details button to open the chosen route table.</p>
+            )}
+
+            <p className="mt-4 text-base font-bold text-slate-900">
+              TOTAL COST: {totalCost === null ? "-" : `INR ${totalCost}`}
             </p>
           </div>
         </main>

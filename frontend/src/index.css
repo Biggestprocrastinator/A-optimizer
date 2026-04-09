@@ -18,4 +18,90 @@ body {
 .leaflet-container {
   width: 100%;
   height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.14), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(34, 197, 94, 0.12), transparent 24%),
+    linear-gradient(135deg, #f8fafc 0%, #eef6ff 52%, #f0fdf4 100%);
+}
+
+.network-shell {
+  position: relative;
+}
+
+.network-map {
+  position: relative;
+  background:
+    linear-gradient(rgba(148, 163, 184, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.12) 1px, transparent 1px);
+  background-size: 56px 56px;
+}
+
+.network-map::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 400;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 18% 22%, rgba(255, 255, 255, 0.85), transparent 20%),
+    radial-gradient(circle at 78% 30%, rgba(191, 219, 254, 0.35), transparent 18%),
+    radial-gradient(circle at 65% 78%, rgba(187, 247, 208, 0.32), transparent 18%);
+}
+
+.network-map__chrome {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  pointer-events: none;
+}
+
+.network-map__badge,
+.network-map__hint {
+  width: fit-content;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(8px);
+  border-radius: 999px;
+  color: #0f172a;
+  padding: 0.35rem 0.7rem;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+}
+
+.network-map__badge {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.network-map__hint {
+  font-size: 0.72rem;
+  color: #475569;
+}
+
+.map-node-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.leaflet-tooltip {
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+  padding: 0.22rem 0.55rem;
+}
+
+.leaflet-tooltip::before {
+  display: none;
+}
+
+.leaflet-control-container {
+  display: none;
 }
